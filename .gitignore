@@ -1,0 +1,8 @@
+.env
+*.db
+*.log
+last_scan.json
+__pycache__/
+*.pyc
+.venv/
+*.zip

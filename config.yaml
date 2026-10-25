@@ -1,0 +1,56 @@
+# DEGEN AUTONOMOUS config. Paper mode is the default; live trading is never enabled here.
+mode: paper            # paper | live (live requires explicit owner approval)
+rpc_url: https://api.mainnet-beta.solana.com   # swap for a Helius URL in Phase 1
+jupiter_base: https://lite-api.jup.ag/swap/v1
+rugcheck_base: https://api.rugcheck.xyz/v1
+dexscreener_base: https://api.dexscreener.com
+
+capital:
+  paper_starting_sol: 0.1   # mirrors the user's real ~$10 budget
+  reserve_pct: 0.30
+  max_risk_per_trade_pct: 0.02
+  max_position_pct: 0.20   # small accounts need bigger % per trade to clear fixed fees
+  max_open_positions: 3
+  max_positions_per_token: 1
+
+limits:
+  daily_loss_pct: 0.06
+  max_drawdown_pct: 0.15
+  losing_streak_halve_after: 4
+  sol_crash_1h_pct: 0.08
+
+security:
+  min_liquidity_usd: 15000
+  max_top10_pct: 0.30          # excluding pools and burn
+  max_single_holder_pct: 0.10
+  max_sell_impact_pct: 0.05    # selling our intended size
+  max_rugcheck_score_normalised: 60   # rugcheck 0-100, higher = riskier
+  min_security_score: 70
+  min_lp_locked_pct: 90        # LP must be burned or locked
+  max_creator_tokens: 3        # creator launched more coins than this = serial deployer
+  max_symbol_clones_7d: 2      # other Solana coins with the same ticker launched in the last 7 days
+
+fees:                      # paper engine charges these so results match reality
+  base_fee_sol: 0.000005
+  priority_fee_sol: 0.0001
+  ata_rent_sol: 0.00203928   # paid on first buy, refunded when the token account is closed
+
+momentum:
+  min_h1_change_pct: 8
+  max_h1_change_pct: 120     # skip vertical blow-offs
+  min_m5_change_pct: 0
+  min_h1_volume_to_liq: 0.5
+  max_h1_volume_to_liq: 3.0   # above this the volume is usually wash trading / bots cycling (MAYA hit 5.56)
+  min_buy_sell_ratio: 1.2
+  min_age_min: 30
+  stop_pct: 12
+  take_profit_pct: [25, 60]  # half off at first target, rest at second or trailing
+  trail_pct: 15
+  time_stop_min: 240
+
+loop:
+  scan_interval_sec: 60
+  candidates_per_scan: 15
+
+telegram:                  # set env TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable
+  approval_mode: true        # semi-auto: every live entry needs a one-tap approval
