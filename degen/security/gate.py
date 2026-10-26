@@ -114,11 +114,24 @@ async def check_token(c, cfg, mint, intended_size_sol=0.15):
         try:
             import time as _t
             week = (_t.time() - 7 * 86400) * 1000
-            clones = {p["baseToken"]["address"] for p in await c.search(d["symbol"])
-                      if p.get("chainId") == "solana" and p["baseToken"]["symbol"].upper() == d["symbol"].upper()
-                      and p["baseToken"]["address"] != mint and (p.get("pairCreatedAt") or 0) > week}
+            same = {}
+            for p in await c.search(d["symbol"]):
+                if p.get("chainId") != "solana" or p["baseToken"]["symbol"].upper() != d["symbol"].upper(): continue
+                a = p["baseToken"]["address"]; t = p.get("pairCreatedAt") or 0; liq = (p.get("liquidity") or {}).get("usd", 0) or 0
+                cur = same.setdefault(a, {"first": t or float("inf"), "liq": 0})
+                if t: cur["first"] = min(cur["first"], t)
+                cur["liq"] = max(cur["liq"], liq)
+            clones = {a for a, v in same.items() if a != mint and v["first"] != float("inf") and v["first"] > week}
             d["symbol_clones_7d"] = len(clones)
-            if len(clones) > s.get("max_symbol_clones_7d", 2): hard.append(f"{len(clones)} copycat {d['symbol']} coins this week")
+            if len(clones) > s.get("max_symbol_clones_7d", 2):
+                # The original coin of a trending ticker always attracts clones. Let it through only if it is
+                # both the oldest AND the most liquid coin with that ticker; block every clone.
+                me = same.get(mint)
+                others = [v for a, v in same.items() if a != mint]
+                original = bool(me) and all(me["first"] < v["first"] for v in others) and all(me["liq"] > v["liq"] for v in others)
+                d["ticker_original"] = original
+                if original: soft.append((f"{len(clones)} copycat {d['symbol']} coins this week (this is the original)", 10))
+                else: hard.append(f"{len(clones)} copycat {d['symbol']} coins this week")
         except Exception:
             pass
 
