@@ -22,3 +22,22 @@ def evaluate(pair: dict, cfg: dict):
             "entry": price, "stop": price * (1 - m["stop_pct"] / 100),
             "targets": [price * (1 + t / 100) for t in m["take_profit_pct"]],
             "confidence": round(conf, 2), "features": f}, f
+
+
+def pullback_entry(pair: dict, w: dict, price: float, cfg: dict):
+    """Second step after a momentum signal: wait for a 5-15% dip off the high, then buy the first uptick with buyers still in control.
+    The stop goes under the dip's low, so normal pullbacks no longer knock us out."""
+    m = cfg["momentum"]
+    if price <= 0: return None
+    prev = w["last"]; w["high"] = max(w["high"], price); w["low"] = min(w["low"], price); w["last"] = price
+    dip = 1 - price / w["high"]
+    lo, hi = m.get("pullback_min_pct", 5) / 100, m.get("pullback_max_pct", 15) / 100
+    if dip > m.get("pullback_kill_pct", 25) / 100: w["t"] = 0; return None   # too deep: it's dumping, drop it
+    tx = (pair.get("txns") or {}).get("m5", {}); bs = tx.get("buys", 0) / max(tx.get("sells", 0), 1)
+    dipped = 1 - w["low"] / w["high"] >= lo
+    if not (dipped and lo * 0.5 <= dip <= hi and price > prev and bs >= 1.0): return None
+    stop = min(price * (1 - m["stop_pct"] / 100), w["low"] * 0.97)
+    return {"agent": "MOMENTUM", "mint": pair["baseToken"]["address"], "symbol": pair["baseToken"]["symbol"],
+            "thesis": f"pullback buy: -{(1 - w['low'] / w['high']) * 100:.0f}% dip off high, bouncing, m5 buys/sells {bs:.2f}",
+            "entry": price, "stop": stop, "targets": [price * (1 + t / 100) for t in m["take_profit_pct"]],
+            "confidence": round(min(1.0, 0.5 + 0.1 * (bs - 1)), 2), "features": {"dip": round(dip, 3), "bs_m5": round(bs, 2)}}

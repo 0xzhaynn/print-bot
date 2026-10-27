@@ -4,13 +4,15 @@ from ..data.clients import SOL
 
 SCHEMA = """CREATE TABLE IF NOT EXISTS positions(id INTEGER PRIMARY KEY, mint TEXT, symbol TEXT, agent TEXT,
  opened REAL, closed REAL, sol_in REAL, tokens REAL, tokens_left REAL, entry_usd REAL, stop_usd REAL,
- targets TEXT, peak_usd REAL, sol_out REAL DEFAULT 0, fees_sol REAL DEFAULT 0, status TEXT, exit_reason TEXT, thesis TEXT);
+ targets TEXT, peak_usd REAL, sol_out REAL DEFAULT 0, fees_sol REAL DEFAULT 0, status TEXT, exit_reason TEXT, thesis TEXT, pair TEXT);
 CREATE TABLE IF NOT EXISTS account(k TEXT PRIMARY KEY, v REAL);"""
 
 class PaperBroker:
     def __init__(self, cfg, clients, path="paper.db"):
         self.cfg, self.c = cfg, clients
         self.db = sqlite3.connect(path); self.db.row_factory = sqlite3.Row; self.db.executescript(SCHEMA)
+        try: self.db.execute("ALTER TABLE positions ADD COLUMN pair TEXT")
+        except sqlite3.OperationalError: pass
         if not self.db.execute("SELECT 1 FROM account WHERE k='cash'").fetchone():
             self.db.execute("INSERT INTO account VALUES('cash',?)", (cfg["capital"]["paper_starting_sol"],))
             self.db.execute("INSERT INTO account VALUES('start',?)", (cfg["capital"]["paper_starting_sol"],)); self.db.commit()
@@ -32,9 +34,9 @@ class PaperBroker:
         tokens = int(q["outAmount"]); fees = f["base_fee_sol"] + f["priority_fee_sol"] + f["ata_rent_sol"]
         if self.cash < size_sol + fees: return None
         self._cash(-(size_sol + fees))
-        self.db.execute("""INSERT INTO positions(mint,symbol,agent,opened,sol_in,tokens,tokens_left,entry_usd,stop_usd,targets,peak_usd,fees_sol,status,thesis)
-          VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'open', ?)""", (signal["mint"], signal["symbol"], signal["agent"], time.time(), size_sol,
-          tokens, tokens, signal["entry"], signal["stop"], json.dumps(signal["targets"]), signal["entry"], fees, signal["thesis"]))
+        self.db.execute("""INSERT INTO positions(mint,symbol,agent,opened,sol_in,tokens,tokens_left,entry_usd,stop_usd,targets,peak_usd,fees_sol,status,thesis,pair)
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'open', ?, ?)""", (signal["mint"], signal["symbol"], signal["agent"], time.time(), size_sol,
+          tokens, tokens, signal["entry"], signal["stop"], json.dumps(signal["targets"]), signal["entry"], fees, signal["thesis"], signal.get("pair")))
         self.db.commit(); return tokens
 
     async def sell(self, pos, frac, reason):

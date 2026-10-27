@@ -47,6 +47,10 @@ momentum:
   take_profit_pct: [25, 60]  # half off at first target, rest at second or trailing
   trail_pct: 15
   time_stop_min: 240
+  pullback_min_pct: 5     # run 5: never buy the pump; wait for a 5-15% dip, buy the bounce
+  pullback_max_pct: 15
+  pullback_kill_pct: 25   # dip deeper than this = dump, stop watching
+  watch_min: 90
 
 loop:
   scan_interval_sec: 60

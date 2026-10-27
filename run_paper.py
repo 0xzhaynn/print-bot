@@ -55,6 +55,20 @@ def risk_state(broker):
         return "cash is at the reserve floor. Waiting for open trades to close."
     return None
 
+def pick_pair(pairs, addr=None):
+    """Price from the same pool every time. Mixing pools (a thin side pool printing a stale price) caused fake stops."""
+    if addr:
+        for x in pairs:
+            if x.get("pairAddress") == addr: return x
+    return max(pairs, key=lambda x: (x.get("liquidity") or {}).get("usd", 0) or 0)
+
+async def real_ratio(c, p):
+    """What the position is really worth now vs entry, from a live Jupiter sell quote (None if no quote)."""
+    try:
+        q = await c.quote(p["mint"], SOL, int(p["tokens_left"]))
+        return (int(q["outAmount"]) / 1e9) / (p["sol_in"] * p["tokens_left"] / p["tokens"])
+    except Exception: return None
+
 RUG_LOSS = 0.5   # a single trade losing more than half its size = rug: ticker and coin banned for good
 SEED_BANS = {"MAYA"}
 
@@ -96,12 +110,16 @@ async def manage(c, cfg, broker, tg):
     for p in broker.open_positions():
         pairs = await c.pairs_for(p["mint"])
         if not pairs: continue
-        price = float(max(pairs, key=lambda x: (x.get("liquidity") or {}).get("usd", 0) or 0).get("priceUsd") or 0)
+        price = float(pick_pair(pairs, p["pair"] if "pair" in p.keys() else None).get("priceUsd") or 0)
+        if price <= 0: continue
         peak = max(p["peak_usd"], price); broker.db.execute("UPDATE positions SET peak_usd=? WHERE id=?", (peak, p["id"])); broker.db.commit()
         t1, t2 = json.loads(p["targets"]); left = p["tokens_left"] / p["tokens"]; age = time.time() - p["opened"]
         reason = frac = None   # moonbag exits (main strategy since run 4): 50% at t1, 30% at t2, last 20% rides to -40% from peak, 72h cap
         if left > 0.75:
-            if price <= p["stop_usd"]: reason, frac = "stop", 1
+            if price <= p["stop_usd"]:
+                r = await real_ratio(c, p)   # confirm with a real sell quote before stopping out
+                if r is None or r <= p["stop_usd"] / p["entry_usd"] + 0.02: reason, frac = "stop", 1
+                else: print("ignored fake stop print", p["symbol"], price, "real", round(r, 3))
             elif price >= t1: reason, frac = "target1", 0.5
             elif age > m["time_stop_min"] * 60: reason, frac = "time", 1
         elif left > 0.3:
@@ -123,11 +141,14 @@ async def cycle(c, cfg, broker, db, tg, gate_cache, shadow, state):
     if halt: return
     if len(broker.open_positions()) >= cfg["capital"]["max_open_positions"]: return
     held = {p["mint"] for p in broker.open_positions()}
+    watch = state.setdefault("watch", {})
+    pbk = cfg["momentum"]
+    for k in [k for k, w in watch.items() if time.time() - w["t"] > pbk.get("watch_min", 90) * 60]: watch.pop(k)
     seen = []
     for src in (c.trending_boosts, c.latest_profiles):
         try: seen += [x["tokenAddress"] for x in await src()]
         except Exception: pass
-    for mint in list(dict.fromkeys(seen))[: cfg["loop"]["candidates_per_scan"]]:
+    for mint in list(dict.fromkeys(list(watch) + seen))[: cfg["loop"]["candidates_per_scan"] + len(watch)]:
         if mint in held or recently_lost(broker, mint): continue
         pairs = await c.pairs_for(mint)
         if not pairs: continue
@@ -136,7 +157,14 @@ async def cycle(c, cfg, broker, db, tg, gate_cache, shadow, state):
         sig, feats = momentum.evaluate(pair, cfg)
         hb = state.setdefault("hb", {"scanned": 0, "signals": 0}); hb["scanned"] += 1; hb["signals"] += bool(sig)
         print("  ", pair["baseToken"]["symbol"][:10], feats, "SIGNAL" if sig else "")
+        if sig and mint not in watch:   # never buy the pump itself: watch it and wait for the dip
+            watch[mint] = {"high": sig["entry"], "low": sig["entry"], "last": sig["entry"], "t": time.time(), "pair": pair.get("pairAddress")}
+            print("   watching for pullback", sig["symbol"])
+        if mint not in watch: continue
+        w = watch[mint]; price = float(pick_pair(pairs, w["pair"]).get("priceUsd") or 0)
+        sig = momentum.pullback_entry(pair, w, price, cfg)
         if not sig: continue
+        sig["pair"] = w["pair"]; watch.pop(mint, None)
         cached = gate_cache.get(mint)
         if not cached or time.time() - cached[0] > GATE_TTL:
             try: r = await check_token(c, cfg, mint)
