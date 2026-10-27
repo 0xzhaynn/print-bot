@@ -28,7 +28,7 @@ def report_text(broker, title, shadow=None):
     for p in broker.open_positions(): lines.append(f"Holding {html.escape(p['symbol'])} ({p['sol_in']:.4f} SOL)")
     halt = risk_state(broker)
     if halt: lines.append(f"New entries PAUSED: {halt}")
-    if shadow:
+    if shadow and False:   # shadow now mirrors main (moonbag exits), hidden from reports
         sh = shadow.stats()
         lines += ["", "<b>Moonbag version (shadow)</b>", f"Closed: {sh['closed']} | Open: {sh['open']}",
                   "Win rate: " + ("-" if sh['win_rate'] is None else f"{sh['win_rate']:.0%}"),
@@ -98,13 +98,17 @@ async def manage(c, cfg, broker, tg):
         if not pairs: continue
         price = float(max(pairs, key=lambda x: (x.get("liquidity") or {}).get("usd", 0) or 0).get("priceUsd") or 0)
         peak = max(p["peak_usd"], price); broker.db.execute("UPDATE positions SET peak_usd=? WHERE id=?", (peak, p["id"])); broker.db.commit()
-        t1, t2 = json.loads(p["targets"]); half_taken = p["tokens_left"] < p["tokens"]
-        reason = frac = None
-        if price <= p["stop_usd"]: reason, frac = "stop", 1
-        elif price >= t2: reason, frac = "target2", 1
-        elif price >= t1 and not half_taken: reason, frac = "target1", 0.5
-        elif half_taken and price <= peak * (1 - m["trail_pct"] / 100): reason, frac = "trail", 1
-        elif time.time() - p["opened"] > m["time_stop_min"] * 60: reason, frac = "time", 1
+        t1, t2 = json.loads(p["targets"]); left = p["tokens_left"] / p["tokens"]; age = time.time() - p["opened"]
+        reason = frac = None   # moonbag exits (main strategy since run 4): 50% at t1, 30% at t2, last 20% rides to -40% from peak, 72h cap
+        if left > 0.75:
+            if price <= p["stop_usd"]: reason, frac = "stop", 1
+            elif price >= t1: reason, frac = "target1", 0.5
+            elif age > m["time_stop_min"] * 60: reason, frac = "time", 1
+        elif left > 0.3:
+            if price >= t2: reason, frac = "target2 (moonbag on)", 0.6
+            elif price <= peak * (1 - m["trail_pct"] / 100) or age > m["time_stop_min"] * 60: reason, frac = "trail/time", 1
+        else:
+            if price <= peak * 0.60 or age > 72 * 3600: reason, frac = f"moonbag out {price / p['entry_usd']:.1f}x", 1
         if reason:
             sol = await broker.sell(p, frac, reason)
             await tg.send(f"PAPER SELL {html.escape(p['symbol'])} ({reason}) {frac:.0%} -> {sol:.4f} SOL | price ${price:.6g}")
